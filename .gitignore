@@ -1,0 +1,5 @@
+*.onnx
+sample.jpg
+detected.jpg
+__pycache__/
+.venv/
