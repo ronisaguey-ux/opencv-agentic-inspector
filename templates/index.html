@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Visual Inspector — OpenCV 5 + AWS</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23234e9a'/><circle cx='16' cy='16' r='7' fill='none' stroke='white' stroke-width='2.5'/><circle cx='16' cy='16' r='2.4' fill='white'/></svg>">
+<style>
+  :root{--bg:#0f1522;--panel:#161e2e;--panel2:#1c2740;--line:#28344c;--ink:#e8eef8;
+    --muted:#93a2bd;--accent:#4f8cff;--ok:#3ecf8e;--warn:#f5a524;--bad:#ff5d5d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif}
+  .wrap{max-width:1200px;margin:0 auto;padding:26px 20px 60px}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+  .logo{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#234e9a,#4f8cff);
+    display:grid;place-items:center}
+  .logo svg{width:24px;height:24px}
+  h1{font-size:22px;margin:0;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:14px}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:18px 0}
+  .btn{background:var(--accent);color:#04122b;border:0;border-radius:10px;padding:11px 18px;
+    font-size:15px;font-weight:700;cursor:pointer}
+  .btn.ghost{background:var(--panel2);color:var(--ink)}
+  .btn[disabled]{opacity:.55;cursor:default}
+  .pill{background:var(--panel2);border:1px solid var(--line);border-radius:999px;
+    padding:5px 12px;font-size:12.5px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .card h2{font-size:14px;margin:0 0 12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  #frame{width:100%;border-radius:10px;border:1px solid var(--line);display:block;background:#0a0f18}
+  .det{display:flex;justify-content:space-between;padding:8px 10px;border-radius:9px;
+    background:var(--panel2);margin-bottom:7px;font-size:13.5px}
+  .det b{color:var(--ink)} .det span{color:var(--muted);font-variant-numeric:tabular-nums}
+  .dec{border-radius:12px;padding:14px;margin-bottom:12px;background:var(--panel2);border:1px solid var(--line)}
+  .dec.crit{border-color:var(--bad);background:linear-gradient(0deg,#2a1620,#1c2740)}
+  .sev{display:inline-block;border-radius:7px;padding:2px 9px;font-size:12px;font-weight:800}
+  .sev.high{background:#3a1a22;color:#ff9a9a}.sev.medium{background:#3a2f16;color:#ffd479}
+  .sev.low{background:#14301f;color:#79e2ab}
+  .kv{margin:7px 0;font-size:14px}.kv .k{color:var(--muted);font-size:12px;display:block;
+    text-transform:uppercase;letter-spacing:.05em}
+  .trace{margin-top:10px;font-size:12.5px;color:var(--muted)}
+  .trace div{padding:3px 0;border-top:1px dashed var(--line)}
+  .hist{font-size:12.5px;color:var(--muted)}
+  .hist div{padding:5px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .note{color:var(--muted);font-size:12.5px;margin-top:14px;line-height:1.6}
+  .spin{width:18px;height:18px;border:3px solid #2a3a55;border-top-color:var(--accent);
+    border-radius:50%;animation:s .8s linear infinite;display:none}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+      <circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.4" fill="white" stroke="none"/></svg></div>
+    <div>
+      <h1>Agentic Visual Inspector</h1>
+      <div class="sub">OpenCV 5 perceives · an agent investigates and decides</div>
+    </div>
+  </header>
+
+  <div class="bar">
+    <button class="btn" id="run">Run inspection on sample frame</button>
+    <label class="btn ghost" style="cursor:pointer">Upload a frame
+      <input type="file" id="file" accept="image/*" style="display:none"></label>
+    <span class="pill" id="p_ocv">OpenCV —</span>
+    <span class="pill" id="p_be">backend —</span>
+    <div class="spin" id="spin"></div>
+    <span class="pill" id="status">ready</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Perception — OpenCV 5 · DNN · ONNX · CPU</h2>
+      <img id="frame" alt="frame under inspection">
+      <div style="margin-top:12px" id="dets"></div>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>Decision — the agent's investigation</h2>
+        <div id="decision" class="note">Run an inspection to see the reasoning.</div>
+      </div>
+      <div class="card">
+        <h2>Line history — what it reasons over</h2>
+        <div id="history" class="hist"></div>
+        <div class="note" id="stats"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    Perception runs entirely on CPU through OpenCV's DNN engine — no cloud on the critical path.
+    The reasoning backend is pluggable: the local OpenAI-compatible endpoint here, Amazon Bedrock
+    (<span class="mono">REASONING_BACKEND=bedrock</span>) on AWS, where the agent's inference is the
+    cloud half and perception stays at the edge.
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+fetch('/api/health').then(r=>r.json()).then(h=>{
+  $('#p_ocv').textContent='OpenCV '+h.opencv;
+  $('#p_be').textContent='backend: '+h.reasoning_backend;
+}).catch(()=>{});
+
+function loadHistory(){
+  fetch('/api/history').then(r=>r.json()).then(h=>{
+    $('#history').innerHTML=(h.recent||[]).map(d=>
+      `<div><b>${esc(d.id)}</b><span>${esc(d['class'])} · ${esc(d.severity)} · ${d.minutes_ago}m ago</span></div>`
+    ).join('') || '<div class="note">no history yet</div>';
+    const s=h.stats||{};
+    const bc=Object.entries(s.by_class||{}).map(([k,v])=>`${k}×${v}`).join(', ');
+    $('#stats').textContent=`last ${s.window_minutes||0} min: ${s.total||0} defects ${bc?('('+bc+')'):''}`;
+  }).catch(()=>{});
+}
+loadHistory();
+
+async function inspect(file){
+  $('#run').disabled=true; $('#spin').style.display='inline-block'; $('#status').textContent='inspecting…';
+  const fd=new FormData();
+  if(file) fd.append('image', file);
+  fd.append('station','QA-3');
+  try{
+    const r=await fetch('/api/inspect',{method:'POST',body:fd});
+    const j=await r.json();
+    if(!j.ok){ $('#status').textContent='error: '+(j.error||'unknown'); return; }
+    $('#status').textContent=`perception ${j.latency_ms} ms · total ${j.total_s}s`;
+    if(j.overlay_jpeg_b64) $('#frame').src='data:image/jpeg;base64,'+j.overlay_jpeg_b64;
+    $('#dets').innerHTML=(j.detections||[]).map((d,i)=>
+      `<div class="det"><b>${i===0?'▶ ':''}${esc(d['class'])}</b><span>${d.confidence} · ${d.area}px²</span></div>`
+    ).join('') || '<div class="note">nothing relevant detected</div>';
+    render(j.decision);
+    loadHistory();
+  }catch(e){ $('#status').textContent='failed: '+e.message; }
+  finally{ $('#run').disabled=false; $('#spin').style.display='none'; }
+}
+
+function render(d){
+  if(!d){ $('#decision').innerHTML='<div class="note">no detection to investigate</div>'; return; }
+  if(d.error){ $('#decision').innerHTML=`<div class="note">${esc(d.error)}</div>`; return; }
+  const sev=(d.severity||'low').toLowerCase();
+  $('#decision').innerHTML=`
+    <div class="dec ${d.critical?'crit':''}">
+      <span class="sev ${sev}">${esc(sev).toUpperCase()}</span>
+      <span class="pill" style="margin-left:8px">${d.critical?'⚠ needs action now':'monitor'}</span>
+      <div class="kv"><span class="k">pattern</span>${esc(d.pattern)}</div>
+      <div class="kv"><span class="k">recommended action</span>${esc(d.action)}</div>
+      <div class="kv"><span class="k">matched prior</span>${esc(d.matched_prior||'none')}</div>
+      <div class="kv"><span class="k">reasoning trace</span>${esc(d.reasoning)}</div>
+    </div>
+    <div class="trace">
+      ${(d.trace||[]).map(t=>`<div>→ ${esc(t.step)}: ${esc(t.detail)}</div>`).join('')}
+      <div>→ backend: ${esc(d.backend||'')} · defect logged as ${esc(d.defect_id||'')}</div>
+    </div>`;
+}
+
+$('#run').onclick=()=>inspect(null);
+$('#file').onchange=e=>{ if(e.target.files[0]){ $('#frame').src=URL.createObjectURL(e.target.files[0]); inspect(e.target.files[0]); } };
+</script>
+</body>
+</html>
