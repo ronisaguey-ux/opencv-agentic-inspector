@@ -1,5 +1,9 @@
-*.onnx
-sample.jpg
-detected.jpg
 __pycache__/
+*.pyc
 .venv/
+.env
+yolov10n.onnx
+detected.jpg
+samples/demo_walkthrough.webm
+samples/ui_screenshot.png
+samples/_degraded_preprocessed.png
