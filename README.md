@@ -1,95 +1,94 @@
 # Agentic Visual Inspector
 
-**A vision system that doesn't just detect a defect — it investigates it, reasons about the cause,
-and recommends an action.**
+**A vision system that doesn't just detect a defect — it investigates it against the line's
+recent past and recommends an action a supervisor can read and challenge.**
 
 Entry for the **OpenCV AI Competition 2026, powered by AWS**.
 
+![architecture](ARCHITECTURE.svg)
+
 ## The problem
 
-Factory QA lines miss subtle defects because inspectors fatigue, and they raise false alarms because
-they cannot weigh context — an isolated blemish and the third identical blemish in an hour are not
-the same event, but a detector treats them the same. Detection alone is a commodity; the decision is
-what costs money.
+QA lines miss subtle defects because inspectors fatigue, and they raise false alarms because a
+detector cannot weigh context. An isolated blemish and the third identical blemish in an hour are
+not the same event, but a per-frame detector reports them identically. Detection is a commodity;
+**the decision is where the money and the safety are.**
 
 ## The idea
 
 Two stages, and the second is the point:
 
-1. **See** — OpenCV 5's DNN engine runs an ONNX detector over a frame and finds candidate defects.
+1. **See** — OpenCV 5's DNN engine runs a YOLOv10 ONNX detector over a frame, on CPU, no cloud.
 2. **Reason** — an agent receives the detection *plus the recent history on that line* and decides:
-   is it critical, which prior defect does it resemble, what is the trend, what should happen next.
-   The output is a reasoning trace a supervisor can read and challenge — not a bare box.
+   is it critical, which prior defect does it resemble, what is the trend, what happens next. The
+   output is a reasoning trace a supervisor can challenge, not a bare box.
 
-## What works today (verified)
+## Verified results
 
 | Piece | Status | Evidence |
 |---|---|---|
-| OpenCV 5 + ONNX detection on CPU | **working** | `detect.py` — 5 detections in ~195 ms on a laptop CPU, no GPU |
-| Agentic reasoning loop | **working** | `agentic_reason.py` — given a defect + 3 prior defects it matched the relevant prior, identified a worsening trend, and recommended an action, with a reasoning trace |
+| OpenCV 5 + ONNX detection, CPU | **working** | 5 detections (bus + 4 people) in **~110–135 ms**, no GPU |
+| Agentic reasoning loop | **working** | investigated the bus detection, judged HIGH, matched a prior, recommended a halt, with a trace |
+| Web endpoint (judge demo) | **working** | `POST /api/inspect` returns detections + decision + annotated frame |
+| Pipeline tests | **passing** | `tests/test_pipeline.py` — perception, retrieval, contract + no-invented-history guard |
 
-```
-$ python detect.py
-OpenCV 5.0.0 · 5 detections in 195 ms (CPU)
-  bus    0.92  [7,137,635,441]
-  person 0.89  [37,234,193,537]
-  ...
+The unedited demo video (`demo.mp4`, 47 s) is the running system.
 
-$ python agentic_reason.py
-{"critical": false, "severity": "medium",
- "matched_prior": "D-052",
- "pattern": "Surface cracks are trending upward in severity over the past few hours.",
- "action": "Flag the part for manual inspection and log the defect for root-cause analysis.",
- "reasoning": "…matching the medium-severity crack logged 95 minutes ago (D-052)…"}
-```
+## The agentic part
 
-## Architecture
+A single prompt is not agency. The reasoner is a **bounded tool loop**: it receives the detection
+and retrieved priors, may call `get_line_history(station, limit)` at most twice if the window looks
+thin, and returns strict JSON:
 
-```
- camera / frame ──▶ OpenCV 5 (preprocess, ONNX detection) ──▶ defect + bbox
-                                                                   │
-                          recent defect history (store) ───────────┤
-                                                                   ▼
-                                                    agentic reasoning (LLM)
-                                                                   │
-                              {critical, severity, matched_prior, pattern, action, reasoning}
-                                                                   ▼
-                                                dashboard overlay + supervisor alert
+```json
+{"critical": true, "severity": "high", "matched_prior": "D-56134",
+ "pattern": "...", "action": "...", "reasoning": "..."}
 ```
 
-The detector is local and cheap; only the reasoning step needs a model, and it is called with a
-compact payload (a detection plus a short history), so it is a few calls per demo — not a stream.
+Retrieval ranks **class match first, recency second** — the two signals a human uses when they say
+"this looks like the one from an hour ago". The system prompt forbids inventing history, and a test
+enforces it: any cited prior must be one the agent was actually given.
 
-## Cloud wiring (the AWS requirement)
+## AWS
 
-The reasoning step is written provider-agnostically and is designed to run on **AWS Bedrock**:
-`reason()` takes the detection and history and returns structured JSON — swapping the local model
-endpoint for Bedrock is a one-function change. The intended full pipeline is S3 (frame store) →
-Lambda (event trigger) → Bedrock (reasoning) → DynamoDB (history) → SNS (alert), with OpenCV 5
-inference on Graviton for the COOL award.
+The reasoning inference is the AWS component. `opencv_inspector/reasoning.py` ships two identical-contract
+backends — a local OpenAI-compatible one (used for development) and **Amazon Bedrock Converse**:
 
-*Status: this needs an AWS account; the CV and reasoning logic above run entirely without it.*
+```sh
+export REASONING_BACKEND=bedrock
+export BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+export AWS_REGION=us-east-1
+```
+
+The loop, prompt and output shape do not change — only the transport. Scale-out is intended on
+**COOL (Cloud-Optimized OpenCV) on Graviton**, since the perception calls are host-agnostic.
+**Honestly: the Bedrock path is implemented and wired but has not been run against a live AWS
+account**, because none was available during development. The contract is verified locally.
 
 ## Run it
 
 ```sh
-pip install -r requirements.txt      # opencv-python >= 5.0.0
-python detect.py                     # self-contained: fetches a model + sample image
-python agentic_reason.py             # needs an OpenAI-compatible endpoint (env below)
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+python detect.py            # perception check: prints detections, writes detected.jpg
+python app.py               # web endpoint on http://127.0.0.1:5092
+python tests/test_pipeline.py
 ```
 
-`agentic_reason.py` reads `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (defaults to a local
-OpenAI-compatible router), so the same code runs against a local model or a hosted one.
+## Layout
 
-## Why it can win
+```
+app.py                  web endpoint (judge demo)
+detect.py               standalone perception check
+opencv_inspector/
+  detector.py           OpenCV 5 DNN + ONNX, render overlay
+  reasoning.py          bounded tool loop; Local + Bedrock backends
+  line_history.py       retrieval over the line's recent defects
+tests/test_pipeline.py  perception, retrieval, contract + grounding guard
+REPORT.md / REPORT.pdf  technical report
+ARCHITECTURE.svg        the diagram above
+BUILD.md                exact build / deploy / test
+```
 
-- **Agentic Vision award** — the system reasons about a defect's history and explains its decision;
-  it does not merely classify.
-- **Real-world impact** — manufacturing QA is a large, measurable cost; fewer false positives and
-  caught early trends are money.
-- **Technical execution** — OpenCV 5's ONNX engine on CPU, a clean cloud story, and a demo that
-  shows the reasoning, not just boxes.
-
-## Licence
-
-MIT.
+See **`REPORT.md`** for the full technical report, including limitations and responsible-use
+considerations.
